@@ -165,12 +165,52 @@ describe("WorkerCredentialSBT Architecture, Phase 2 Negative Tests & Phase 3 Gov
       expect(await sbt.isCredentialValid(1n)).to.be.true;
       expect(await sbt.ownerOf(1n)).to.equal(worker.address);
     });
+
+    it("위임 승인 불가 (Soulbound): approve 및 setApprovalForAll 호출 시 SoulboundApprovalBlocked로 차단되어야 한다", async function () {
+      await sbt.connect(issuer).issueCredential(worker.address, VISA_E9_MFG, 0, SAMPLE_METADATA);
+
+      await expect(
+        sbt.connect(worker).approve(employer.address, 1n)
+      ).to.be.revertedWithCustomError(sbt, "SoulboundApprovalBlocked");
+
+      await expect(
+        sbt.connect(worker).setApprovalForAll(employer.address, true)
+      ).to.be.revertedWithCustomError(sbt, "SoulboundApprovalBlocked");
+    });
+
+    it("보유 토큰 목록 조회(getCredentialsByOwner) 및 공급량(totalSupply) 검증", async function () {
+      expect(await sbt.totalSupply()).to.equal(0n);
+
+      await sbt.connect(issuer).issueCredential(worker.address, VISA_E9_MFG, 0, SAMPLE_METADATA);
+      await sbt.connect(issuer).issueCredential(worker.address, VISA_E7_SHIP, 0, SAMPLE_METADATA);
+
+      expect(await sbt.totalSupply()).to.equal(2n);
+
+      const workerTokens = await sbt.getCredentialsByOwner(worker.address);
+      expect(workerTokens.length).to.equal(2);
+      expect(workerTokens[0]).to.equal(1n);
+      expect(workerTokens[1]).to.equal(2n);
+
+      // 0번 주소 조회 시 Revert
+      await expect(
+        sbt.getCredentialsByOwner(ethers.ZeroAddress)
+      ).to.be.revertedWithCustomError(sbt, "InvalidRecipient");
+    });
+
+    it("표준 인터페이스 지원 검증 (ERC721 및 AccessControl supportsInterface)", async function () {
+      // ERC721 interfaceId: 0x80ac58cd
+      expect(await sbt.supportsInterface("0x80ac58cd")).to.be.true;
+      // AccessControl interfaceId: 0x7965db0b
+      expect(await sbt.supportsInterface("0x7965db0b")).to.be.true;
+      // 지원하지 않는 임의 인터페이스
+      expect(await sbt.supportsInterface("0xffffffff")).to.be.false;
+    });
   });
 
   /* ========================================================================== */
-  /*            2. Phase 2: 7대 네거티브 테스트 스위트 (N-1 ~ N-8)               */
+  /*   2. Phase 2 네거티브 테스트 (N-5 제외, 경계값 N-6b 포함) [8개 케이스]     */
   /* ========================================================================== */
-  describe("2. Phase 2: 7대 네거티브 테스트 스위트 (N-1 ~ N-8)", function () {
+  describe("2. Phase 2 네거티브 테스트 (N-5 제외, 경계값 N-6b 포함)", function () {
     it("[N-1] 비인가 계정(attacker)이 issueCredential 호출 시 AccessControlUnauthorizedAccount로 Revert 되어야 한다", async function () {
       const ISSUER_ROLE = await sbt.ISSUER_ROLE();
       await expect(
@@ -291,6 +331,47 @@ describe("WorkerCredentialSBT Architecture, Phase 2 Negative Tests & Phase 3 Gov
         .to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount")
         .withArgs(issuer.address, DEFAULT_ADMIN_ROLE);
     });
+
+    it("Admin이 기관 상태를 None으로 전환 시 ISSUER_ROLE이 회수되고 신규 발급 시 차단되어야 한다", async function () {
+      const ISSUER_ROLE = await sbt.ISSUER_ROLE();
+      await sbt.connect(admin).setIssuerStatus(issuer.address, Status.None);
+      expect(await sbt.hasRole(ISSUER_ROLE, issuer.address)).to.be.false;
+
+      await expect(
+        sbt.connect(issuer).issueCredential(worker.address, VISA_E9_MFG, futureExpiry, SAMPLE_METADATA)
+      ).to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount").withArgs(issuer.address, ISSUER_ROLE);
+    });
+
+    it("ISSUER_ROLE만 부여받고 기관 상태가 Active가 아닌 경우(Status.None) IssuerNotActive로 Revert 되어야 한다", async function () {
+      const ISSUER_ROLE = await sbt.ISSUER_ROLE();
+      await sbt.connect(admin).grantRole(ISSUER_ROLE, attacker.address);
+      expect(await sbt.issuerStatus(attacker.address)).to.equal(Status.None);
+
+      await expect(
+        sbt.connect(attacker).issueCredential(worker.address, VISA_E9_MFG, futureExpiry, SAMPLE_METADATA)
+      ).to.be.revertedWithCustomError(sbt, "IssuerNotActive").withArgs(Status.None);
+    });
+
+    it("setIssuerStatus 호출 시 대상 주소가 영주소이면 InvalidRecipient로 Revert 되어야 한다", async function () {
+      await expect(
+        sbt.connect(admin).setIssuerStatus(ethers.ZeroAddress, Status.Active)
+      ).to.be.revertedWithCustomError(sbt, "InvalidRecipient");
+    });
+
+    it("컨트랙트 배포 시 관리자/발급자/심의관 주소 중 영주소가 포함되면 InvalidRecipient로 Revert 되어야 한다", async function () {
+      const Factory = await ethers.getContractFactory("WorkerCredentialSBT");
+      await expect(
+        Factory.deploy(ethers.ZeroAddress, issuer.address, operator.address)
+      ).to.be.revertedWithCustomError(sbt, "InvalidRecipient");
+
+      await expect(
+        Factory.deploy(admin.address, ethers.ZeroAddress, operator.address)
+      ).to.be.revertedWithCustomError(sbt, "InvalidRecipient");
+
+      await expect(
+        Factory.deploy(admin.address, issuer.address, ethers.ZeroAddress)
+      ).to.be.revertedWithCustomError(sbt, "InvalidRecipient");
+    });
   });
 
   /* ========================================================================== */
@@ -382,6 +463,24 @@ describe("WorkerCredentialSBT Architecture, Phase 2 Negative Tests & Phase 3 Gov
       await expect(sbt.connect(admin).approveRevocation(1n))
         .to.emit(sbt, "CredentialRevoked")
         .withArgs(1n, admin.address, "관리자 직권 안건");
+    });
+
+    it("emergencyRevokeCredential을 이미 박탈된 토큰에 재호출 시 CredentialAlreadyRevoked로 Revert 되어야 한다", async function () {
+      await sbt.connect(admin).emergencyRevokeCredential(1n, "1차 긴급 박탈");
+      await expect(
+        sbt.connect(admin).emergencyRevokeCredential(1n, "2차 긴급 박탈")
+      ).to.be.revertedWithCustomError(sbt, "CredentialAlreadyRevoked");
+    });
+
+    it("approveRevocation 실행 시점 이전에 해당 토큰이 긴급 박탈 등으로 이미 폐기되었다면 Revert 되어야 한다", async function () {
+      // 제안 생성
+      await sbt.connect(issuer).proposeRevocation(1n, "심의 제안");
+      // 승인 전 Admin이 긴급 직권 박탈
+      await sbt.connect(admin).emergencyRevokeCredential(1n, "선행 긴급 박탈");
+      // 제안 승인 시도 시 CredentialAlreadyRevoked
+      await expect(
+        sbt.connect(operator).approveRevocation(1n)
+      ).to.be.revertedWithCustomError(sbt, "CredentialAlreadyRevoked");
     });
   });
 
@@ -516,6 +615,14 @@ describe("WorkerCredentialSBT Architecture, Phase 2 Negative Tests & Phase 3 Gov
       )
         .to.be.revertedWithCustomError(sbt, "ProposalAlreadyExecuted")
         .withArgs(1n);
+    });
+
+    it("approveReissue 실행 시점 이전에 해당 토큰이 긴급 박탈 등으로 이미 폐기되었다면 Revert 되어야 한다", async function () {
+      await sbt.connect(issuer).proposeReissue(1n, newWorker.address, "재발급 안건");
+      await sbt.connect(admin).emergencyRevokeCredential(1n, "선행 긴급 박탈");
+      await expect(
+        sbt.connect(operator).approveReissue(1n)
+      ).to.be.revertedWithCustomError(sbt, "CredentialAlreadyRevoked");
     });
   });
 

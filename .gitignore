@@ -6,6 +6,8 @@ node_modules/
 contracts/artifacts/
 contracts/cache/
 contracts/typechain-types/
+contracts/coverage/
+contracts/coverage.json
 
 # Next.js build output & cache
 frontend/.next/
