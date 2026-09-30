@@ -17,8 +17,8 @@ async function main() {
   // 1. WorkerCredentialSBT (Soulbound Token) 배포
   console.log(`\n--- Deploying WorkerCredentialSBT ---`);
   const SBTFactory = await ethers.getContractFactory("WorkerCredentialSBT");
-  // deployer를 defaultAdmin이자 initialIssuer로 등록
-  const sbt = await SBTFactory.deploy(deployer.address, deployer.address);
+  // deployer를 defaultAdmin, initialIssuer, initialOperator로 초기 설정
+  const sbt = await SBTFactory.deploy(deployer.address, deployer.address, deployer.address);
   await sbt.waitForDeployment();
 
   const sbtAddress = await sbt.getAddress();

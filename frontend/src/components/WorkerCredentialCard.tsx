@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useAccount, useReadContract, useSignMessage, useWatchContractEvent } from 'wagmi';
 import sbtArtifact from '@/contracts/WorkerCredentialSBT.json';
+import { getCredentialLabel } from '@/config/credentials';
 import {
   Award,
   ShieldCheck,
@@ -16,6 +17,7 @@ import {
   AlertTriangle,
   RotateCw,
   Clock,
+  GitCommit,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -368,7 +370,8 @@ function SingleCredentialView({ tokenId }: { tokenId: bigint }) {
   }
 
   const cred = rawCred as {
-    credentialType: string;
+    credentialCode?: `0x${string}`;
+    credentialType?: string;
     issuer: string;
     issuedAt: bigint;
     expiresAt: bigint;
@@ -376,12 +379,28 @@ function SingleCredentialView({ tokenId }: { tokenId: bigint }) {
     revokedAt: bigint;
     revokeReason: string;
     revokedBy: string;
+    previousTokenId?: bigint;
   };
+
+  const hasPrevious = Boolean(cred?.previousTokenId && cred.previousTokenId > 0n);
+
+  const { data: rawLineage } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: CONTRACT_ABI,
+    functionName: 'getCredentialLineage',
+    args: [tokenId],
+    query: {
+      enabled: hasPrevious,
+    },
+  });
+
+  const lineageList = Array.isArray(rawLineage) ? (rawLineage as bigint[]) : [];
 
   const nowSec = Math.floor(Date.now() / 1000);
   const isExpired = cred.expiresAt > 0n && BigInt(nowSec) >= cred.expiresAt;
   const isRevoked = cred.isRevoked;
   const activeValid = Boolean(isValid) && !isExpired && !isRevoked;
+  const credentialTitle = getCredentialLabel(cred.credentialCode || cred.credentialType);
 
   return (
     <div
@@ -396,7 +415,7 @@ function SingleCredentialView({ tokenId }: { tokenId: bigint }) {
       <div className="flex items-start justify-between gap-2">
         <div>
           <span className="text-[10px] font-mono text-slate-500">Token ID #{tokenId.toString()}</span>
-          <h4 className="font-bold text-white text-sm mt-0.5">{cred.credentialType}</h4>
+          <h4 className="font-bold text-white text-sm mt-0.5">{credentialTitle}</h4>
         </div>
         <span
           className={`px-2 py-0.5 rounded text-[10px] font-bold ${
@@ -431,6 +450,23 @@ function SingleCredentialView({ tokenId }: { tokenId: bigint }) {
           </span>
         </p>
       </div>
+
+      {hasPrevious && (
+        <div className="mt-3 p-2 rounded bg-purple-950/40 border border-purple-800/40 text-[10px] text-purple-300 space-y-0.5">
+          <div className="flex items-center gap-1 font-bold">
+            <GitCommit className="w-3 h-3 text-purple-400" />
+            <span>분실 재발급 승계 토큰 (Lineage)</span>
+          </div>
+          <p className="text-slate-400">
+            직전 토큰: #{cred.previousTokenId?.toString()}
+            {lineageList.length > 0 && (
+              <span className="ml-1 font-mono text-purple-300">
+                (전체 계보: {lineageList.map((id) => `#${id.toString()}`).join(' ➔ ')})
+              </span>
+            )}
+          </p>
+        </div>
+      )}
 
       {isRevoked && (
         <div className="mt-3 p-2 rounded bg-rose-950/40 border border-rose-900/40 text-[10px] text-rose-300 space-y-0.5">

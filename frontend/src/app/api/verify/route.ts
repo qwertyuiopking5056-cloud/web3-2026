@@ -3,6 +3,7 @@ import { createPublicClient, http, isAddress, verifyMessage } from 'viem';
 import { hardhat } from 'viem/chains';
 import { verifyAndConsumeNonce } from '@/lib/nonceStore';
 import sbtArtifact from '@/contracts/WorkerCredentialSBT.json';
+import { getCredentialLabel } from '@/config/credentials';
 
 const CONTRACT_ADDRESS = sbtArtifact.address as `0x${string}`;
 const CONTRACT_ABI = sbtArtifact.abi;
@@ -119,7 +120,8 @@ export async function POST(req: NextRequest) {
           functionName: 'getCredential',
           args: [id],
         }) as {
-          credentialType: string;
+          credentialCode?: `0x${string}`;
+          credentialType?: string;
           issuer: string;
           issuedAt: bigint;
           expiresAt: bigint;
@@ -128,7 +130,23 @@ export async function POST(req: NextRequest) {
           revokedAt: bigint;
           revokeReason: string;
           revokedBy: string;
+          previousTokenId?: bigint;
         };
+
+        let lineage: number[] = [Number(id)];
+        try {
+          const rawLineage = await publicClient.readContract({
+            address: CONTRACT_ADDRESS,
+            abi: CONTRACT_ABI,
+            functionName: 'getCredentialLineage',
+            args: [id],
+          }) as bigint[];
+          if (rawLineage && rawLineage.length > 0) {
+            lineage = rawLineage.map(Number);
+          }
+        } catch {
+          // 제네시스 또는 단일 토큰 fallback
+        }
 
         const nowSec = Math.floor(Date.now() / 1000);
         const isExpired = rawCred.expiresAt > 0n && BigInt(nowSec) >= rawCred.expiresAt;
@@ -137,9 +155,13 @@ export async function POST(req: NextRequest) {
           hasAtLeastOneValid = true;
         }
 
+        const rawCode = rawCred.credentialCode || rawCred.credentialType || '';
+        const displayType = getCredentialLabel(rawCode);
+
         credentialsResults.push({
           tokenId: Number(id),
-          credentialType: rawCred.credentialType,
+          credentialCode: rawCred.credentialCode || null,
+          credentialType: displayType,
           issuer: rawCred.issuer,
           issuedAt: Number(rawCred.issuedAt),
           expiresAt: Number(rawCred.expiresAt),
@@ -148,6 +170,8 @@ export async function POST(req: NextRequest) {
           revokedAt: Number(rawCred.revokedAt),
           revokeReason: rawCred.revokeReason,
           revokedBy: rawCred.revokedBy,
+          previousTokenId: rawCred.previousTokenId ? Number(rawCred.previousTokenId) : 0,
+          lineage,
           isValidOnChain,
           metadataURI: rawCred.metadataURI,
         });
